@@ -7,6 +7,9 @@ const __filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(__filename)
 
 const nextConfig: NextConfig = {
+  // Erzeugt .next/standalone: ein eigenständiger Node-Server für das Hosting bei Infomaniak.
+  output: 'standalone',
+  poweredByHeader: false,
   images: {
     localPatterns: [
       {

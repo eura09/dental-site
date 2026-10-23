@@ -1,0 +1,90 @@
+name: Deploy (Infomaniak)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      # Repository → Settings → Secrets and variables → Actions
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+      RELEASE: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm typecheck
+
+      - run: pnpm lint
+
+      - name: Build
+        run: pnpm build
+        env:
+          # Nur für den Build – die echte Datenbank liegt auf dem Server.
+          DATABASE_URL: file:/tmp/build.db
+          PAYLOAD_SECRET: build-only-secret
+          NEXT_PUBLIC_SERVER_URL: ${{ vars.SITE_URL }}
+
+      - name: Release-Ordner zusammenstellen
+        run: |
+          mkdir -p release
+          cp -a .next/standalone/. release/
+          mkdir -p release/.next
+          cp -a .next/static release/.next/static
+          cp -a public release/public
+
+      - name: SSH einrichten
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
+
+      - name: Hochladen
+        run: |
+          SSH="ssh -i ~/.ssh/id_deploy"
+          $SSH "$SSH_USER@$SSH_HOST" "mkdir -p '$DEPLOY_PATH/releases' '$DEPLOY_PATH/shared/data' '$DEPLOY_PATH/shared/media' '$DEPLOY_PATH/backups'"
+          rsync -az --delete -e "$SSH" release/ "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/releases/$RELEASE/"
+          rsync -az -e "$SSH" scripts/supervisor.mjs scripts/backup.sh "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/"
+
+      - name: Aktivieren
+        run: |
+          ssh -i ~/.ssh/id_deploy "$SSH_USER@$SSH_HOST" bash -s <<EOF
+            set -euo pipefail
+            cd "$DEPLOY_PATH"
+            chmod +x backup.sh
+            # Vor jedem Deploy: Datenbank sichern (Migrationen laufen beim Start)
+            ./backup.sh pre-deploy || echo "Backup übersprungen"
+            ln -sfn "releases/$RELEASE" current
+            echo "$RELEASE" > CURRENT_RELEASE   # supervisor.mjs startet den Server neu
+            # Nur die letzten 5 Releases behalten
+            ls -1dt releases/*/ | tail -n +6 | xargs -r rm -rf
+          EOF
+
+      - name: Smoke-Test
+        if: ${{ vars.SITE_URL != '' }}
+        run: |
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "${{ vars.SITE_URL }}/" || true)
+            [ "$code" = "200" ] && echo "OK ($code)" && exit 0
+            sleep 5
+          done
+          echo "Website antwortet nicht mit 200" && exit 1
