@@ -7,7 +7,7 @@ Website for the dental practice of Dr. L. Tulani in Gossau SG. It replaces praxi
 Everything stays in Switzerland: the code, the database (one SQLite file) and uploaded images all live on the Infomaniak web hosting. There are no tracking cookies and no Google Fonts requests (fonts are self-hosted via `@fontsource`), and the map link goes to OpenStreetMap.
 
 ---
-
+test
 ## Local development
 
 Requirements: Node `^22.23.4` or `>=24.22.1`, pnpm 10 (`corepack enable`).
